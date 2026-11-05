@@ -1,0 +1,27 @@
+# ============================================================
+# 大创 Demo 环境依赖 (Python 3.8, CUDA 11.3)
+# 安装顺序:
+#   1. pip install torch==1.10.1+cu113 torchvision==0.11.2+cu113 -f https://download.pytorch.org/whl/cu113/torch_stable.html
+#   2. pip install -r requirements.txt
+#   3. 安装 graspnetAPI: cd graspnet-baseline/graspnetAPI && python setup.py install
+# ============================================================
+
+# ---- 基础 ----
+numpy>=1.21
+scipy>=1.7
+opencv-python>=4.5
+matplotlib>=3.4
+tqdm>=4.62
+pillow>=8.4
+scikit-learn>=1.0
+pyyaml>=5.4
+
+# ---- 点云 ----
+open3d==0.15.1
+
+# ---- VLM (可选, Step5) ----
+# transformers>=4.32
+# accelerate>=0.20
+
+# ---- 真实相机 (可选, Step7) ----
+# pyrealsense2>=2.50

@@ -1,0 +1,185 @@
+# 复现《面向具身智能机器人的快速精准抓取位姿估计》Demo可执行清单
+> 重要说明：该论文**无官方开源代码**，该论文算法骨架基于 GraspNet‑Baseline / GSNet 代码范式改造。我们以**GraspNet‑1Billion数据集生态作为基线底座**，复现它核心链路：RGB‑D输入 → 2D抓取区域热图预测 → 局部点云截取 → 非均匀采样抓取搜索；VLM语言交互部分做最简接入。
+> 目标：先跑通仿真数据集Demo（优先，不需要实物机械臂），后续再迁移真实相机；你的力学优化模块暂时不加入，先复现基线。
+
+## 一\(\gamma、\beta\)硬件准备
+|硬件|说明|
+|---|---|
+|PC主机|GPU显存 ≥12G（RTX3060/4060Ti及以上，推荐24G更好）；系统 Ubuntu 18.04 /20.04（论文环境Ubuntu18.04），Windows可以WSL2|
+|（可选，实物demo）RealSense D435i|RGB‑D相机，真实场景采集；前期仿真调试可以不用|
+|（可选，实物demo）UR3机械臂|后期实物验证，前期数据集调试不需要|
+
+## 二\(\gamma、\beta\)软件/环境准备清单
+### 1）基础系统 & 深度学习框架
+1. Anaconda / Miniconda，创建conda虚拟环境
+```bash
+conda create -n grasp_demo python=3.8
+conda activate grasp_demo
+```
+2. PyTorch：匹配CUDA版本，论文使用GPU训练推理，示例 CUDA11.3
+```bash
+pip3 install torch==1.10.1+cu113 torchvision==0.11.2+cu113 torchaudio==0.10.1+cu113 -f [https://download.pytorch.org/whl/cu113/torch_stable.html](https://download.pytorch.org/whl/cu113/torch_stable.html)
+```
+3. 依赖基础包
+```bash
+pip install opencv-python numpy scipy matplotlib tqdm pillow scikit-learn
+```
+
+### 2）三维视觉\(\gamma、\beta\)点云工具库（核心拼接依赖）
+1. **Open3D 0.15.1**：RGB‑D转点云\(\gamma、\beta\)点云下采样\(\gamma、\beta\)法向计算\(\gamma、\beta\)可视化
+```bash
+pip install open3d==0.15.1
+```
+2. **GraspNet‑API（graspnet‑baseline工具包）**【最重要】
+> 提供：GraspNet数据集读取\(\gamma、\beta\)`depth2cloud`深度转点云\(\gamma、\beta\)相机内参\(\gamma、\beta\)抓取label解析\(\gamma、\beta\)评估AP指标脚本
+```bash
+git clone [https://github.com/graspnet/graspnet-baseline.git](https://github.com/graspnet/graspnet-baseline.git)
+cd graspnet-baseline
+pip install -r requirements.txt
+# 安装graspnetapi
+cd graspnetAPI
+python setup.py install
+```
+3. PointNet++ 算子：用于点云特征提取（graspnet‑baseline自带编译脚本）
+```bash
+cd graspnet-baseline/pointnet2
+python setup.py install
+```
+4. （VLM模块，语言交互）Qwen‑VL推理依赖
+```bash
+pip install transformers accelerate torchvision pillow
+```
+> 不需要完整微调Qwen‑VL，demo只做推理，输入图片+prompt输出物体bbox。
+
+5. （后续实物机械臂才需要）
+- pyrealsense2：RealSense相机驱动
+- ROS Noetic / UR‑RTDE：UR3机械臂控制；pybullet（仿真抓取可视化）
+
+## 三\(\gamma、\beta\)数据集下载准备（必须，仿真demo核心）
+数据集：**GraspNet‑1Billion**
+1. 官网申请下载：[https://graspnet.net/datasets](https://graspnet.net/datasets)
+> Demo最小下载子集：
+- `GraspNet/train/scenes`（前100训练场景）
+- `GraspNet/test/scenes`（90个测试场景）
+- `grasp_labels`抓取标注；`camera`相机参数（RealSense内参）
+2. 本地目录结构严格按照官方规范：
+```
+└── graspnet_data
+    ├── scenes
+    ├── grasp_labels
+    └── camera
+```
+3. 设置环境变量，让graspnetAPI找到数据集
+```bash
+export GRASPNET_ROOT=/xxx/xxx/graspnet_data
+```
+
+## 四\(\gamma、\beta\)代码库拼接策略（没有官方源码，复用底座+复现论文新增模块）
+> 📌底座：`graspnet‑baseline`（已有的6‑DoF抓取框架，实现点云读取\(\gamma、\beta\)评估\(\gamma、\beta\)可视化）
+> 📌论文新增三块需要自己实现（这部分没有现成完整代码）：
+> ① HRNet编码‑解码抓取区域预测模块（输出热图：抓取置信\(\gamma、\beta\)θ\(\gamma、\beta\)w\(\gamma、\beta\)d）
+> ② 球形局部点云截取 + RGB‑点云特征融合模块
+> ③ **非均匀采样抓取位姿搜索（块坐标下降迭代接近向量）**
+> 📌外挂模块：Qwen‑VL，输入图像文本指令输出2D bbox。
+
+> 复用哪些现成代码，哪些自己写：
+|模块|来源|任务|
+|---|---|---|
+|RGB‑D读取\(\gamma、\beta\)depth转点云\(\gamma、\beta\)相机内参|graspnetAPI + Open3D|直接调用API，不用手写针孔投影公式|
+|PointNet点云特征提取|graspnet‑baseline pointnet2|直接复用算子|
+|抓取评估AP计算脚本|graspnet‑baseline eval.py|直接复用评估脚本|
+|HRNet骨干网络|开源HRNet权重|直接拿预训练HRNet，搭建解码头（自己写解码预测头）|
+|抓取区域热图\(\gamma、\beta\)高斯编码损失\(\gamma、\beta\)网格锚框|**自己实现**|论文核心新增1|
+|球形邻域采样\(\gamma、\beta\)RGB‑点云特征融合|**自己实现**|论文核心新增2|
+|非均匀采样+块坐标下降优化接近向量|**自己实现**|论文核心新增3|
+|Qwen‑VL推理，目标框提取|transformers库，调用预训练权重|仅写调用逻辑，不训练大模型|
+
+## 五\(\gamma、\beta\)分步可执行实现步骤（Step by Step Demo）
+> 阶段1：数据读取与预处理；阶段2：复现网络前半部分2D抓取区域预测；阶段3：二维到三维点云映射\(\gamma、\beta\)特征融合；阶段4：非均匀抓取位姿搜索；阶段5：VLM语言交互demo；阶段6：可视化+评估；阶段7【可选】迁移真实相机实物。
+
+### Step 1：环境&数据集校验（先跑通，不训练网络）
+1. 激活conda环境，设置数据集环境变量；
+2. 运行graspnet‑baseline自带demo脚本，确认可以读取场景，depth转点云\(\gamma、\beta\)可视化点云\(\gamma、\beta\)读取抓取标签。
+```bash
+cd graspnet-baseline
+python demo/graspnet_demo.py
+```
+✅预期结果：弹出窗口，显示场景点云+真值抓取位姿；说明数据集\(\gamma、\beta\)Open3D\(\gamma、\beta\)graspnetAPI全部正常。
+
+### Step2：搭建论文网络第一部分：编码‑解码抓取区域预测模块
+1. 下载HRNet预训练权重（HRNet‑W32）作为骨干；
+2. 搭建解码头（上采样层），输出4路热图：
+   - $Q_c$抓取区域置信热图
+   - $Q_\theta$旋转角度热图
+   - $Q_w$夹爪宽度热图
+   - $Q_d$深度偏移热图
+3. 实现论文损失函数：$L = L_c+aL_\theta+bL_w+cL_D+L_v+dL_o$
+4. 数据集读取：读取RGB‑D图像，做论文预处理：图像resize到640×360；实现**高斯编码对抓取中心点标签编码，网格锚框标签生成**。
+
+> 测试：输入一张GraspNet的RGB‑D，网络输出热图，可视化热图看高置信抓取区域是否落在物体上。
+
+### Step3：二维抓取区域映射三维点云，局部球形区域+特征融合
+1. 从热图选出top‑$k_c$高置信网格；
+2. 根据相机内参，将图像坐标$\((u,v)\)$ +深度d，投影三维$\((X,Y,Z)\)$；
+3. 以三维点为球心，球半径为预测的夹爪宽度w，截取球形局部点云；做最远点下采样得到N0=512点；
+4. **实现语义‑点特征融合模块**：将RGB图像纹理特征与PointNet点云几何特征拼接池化，输出局部融合特征$F_{local}$。
+
+✅输出：每一个候选抓取区域得到一块局部点云 + 融合特征。
+
+### Step4：实现【非均匀采样抓取位姿搜索算法】（本论文最大创新模块）
+> 原基线GraspNet/GSNet用球面均匀采样，这里替换成本文块坐标下降迭代优化接近向量。
+1. 训练阶段：实现块坐标下降迭代公式，交替更新独热编码矩阵$B_\alpha$和预测角度$\alpha$；优化接近向量分布；
+2. 推理阶段：输入局部融合特征$F_{local}$，MLP做分类，输出非均匀分布的接近向量，对应$\gamma\(\gamma、\beta\)\beta$；
+3. 拼接已经预测好的$u,v,\theta,w,d$，组装完整6‑DoF抓取位姿 $g=\{u, v, \theta, w, d, \gamma, \beta\}$。
+
+> 测试：输入局部点云，输出一批6‑DoF抓取位姿；Open3D可视化夹爪，看候选姿态是否生成。
+
+### Step5：VLM语言交互最简Demo（可选，具身交互部分）
+> 不需要微调Qwen‑VL，推理即可；模拟用户指令“抓取毛绒玩具”
+1. 加载Qwen‑VL预训练模型；
+2. 输入prompt：`"框出图中的毛绒玩具"`，输入RGB图像，输出2D bounding‑box；
+3. 在网络输出的全部抓取候选中，筛选中心点落在bbox内的抓取，取置信度最高作为最终抓取位姿。
+
+### Step6：可视化+评估
+1. 可视化：Open3D绘制场景点云 + 预测6‑DoF抓取夹爪；复现论文图3可视化效果；
+2. 复用graspnet‑baseline的`eval.py`评估脚本，计算 $AP\(\gamma、\beta\)AP_{0.8}\(\gamma、\beta\)AP_{0.4}$；
+3. 对比基线GraspNet\(\gamma、\beta\)GSNet的指标。
+
+### Step7【可选，实物迁移，后期做】
+1. RealSense D435i采集RGB‑D，对齐彩色与深度；
+2. 图像resize到640×360送入网络；输出6‑DoF抓取位姿；相机坐标系转到机械臂基坐标系；
+3. UR3接收位姿，执行抓取。
+
+## 六\(\gamma、\beta\)遇到的坑提前提示
+1. ❗GraspNet数据集相机有RealSense/Kinect两套，论文只用RealSense，不要混用。
+2. ❗HRNet输入输出分辨率，网格划分参数：$r=8, k_a=6$，严格和论文超参对齐。
+3. ❗非均匀采样训练阶段块坐标下降迭代是**训练时更新接近向量**，推理阶段直接用训练好的向量，推理不迭代，这点非常容易写错。
+4. ❗RGB‑D和点云坐标系对齐，像素投影公式出错会导致抓取点飘离物体。
+
+## 七\(\gamma、\beta\)文件目录参考
+```
+grasp_demo_project
+├── env.sh                     # 环境变量设置脚本
+├── config.yaml                # 超参配置（kc\(\gamma、\beta\)N0\(\gamma、\beta\)kr\(\gamma、\beta\)网格r等）
+├── data_preprocess            # 数据集读取，高斯标签编码
+├── model
+│   ├── hrnet_backbone.py      # HRNet骨干（开源权重）
+│   ├── grasp_decoder.py       # 解码头输出热图（自己实现）
+│   ├── feature_fusion.py      # RGB‑点云特征融合（自己实现）
+│   ├── non_uniform_search.py  # 【核心复现】非均匀采样+块坐标下降
+│   └── loss.py                # 论文完整损失函数
+├── vlm_demo                   # Qwen‑VL调用脚本
+├── tools
+│   ├── vis_grasp.py           # 抓取可视化（复用open3d）
+│   └── graspnet_eval.py       # 评估脚本（来自graspnet‑baseline）
+├── train.py                   # 训练脚本
+├── inference_demo.py          # ✅单帧推理demo，输入RGBD输出抓取位姿
+└── real_camera_demo.py       # 【可选】RealSense相机实时推理
+```
+
+## 八\(\gamma、\beta\)优先级建议（快速跑通Demo）
+1. 先不训练完整网络：先用GraspNet真值标签，先把**Step1，Step3，Step4非均匀搜索模块单独调试通**；
+2. 再训练2D热图网络；
+3. VLM语言交互放在最后做，属于锦上添花，不影响抓取位姿复现。
+
+如果你需要，我可以把 `inference_demo.py` 的伪代码框架写出来。

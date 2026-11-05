@@ -1,0 +1,98 @@
+# ============================================================
+# 复现《面向具身智能机器人的快速精准抓取位姿估计》Demo 超参配置
+# 超参严格对齐论文: r=8, k_a=6, N0=512
+# ============================================================
+
+# ---------- 路径 ----------
+paths:
+  # GraspNet-1Billion 数据集根目录 (scenes / grasp_labels / camera)
+  # 也可通过环境变量 GRASPNET_ROOT 覆盖
+  graspnet_root: ""
+  # HRNet-W32 预训练权重 (.pth), 为空则使用随机初始化骨干
+  hrnet_pretrained: ""
+  # 2D 抓取区域预测网络权重 (训练后保存 / 推理加载)
+  checkpoint_2d: "checkpoints/grasp2d_best.pth"
+  # 非均匀采样搜索模块权重
+  checkpoint_search: "checkpoints/search_best.pth"
+
+# ---------- 相机 (GraspNet RealSense 内参, 640x360 下缩放) ----------
+camera:
+  # 原始分辨率 1280x720, 论文 resize 到 640x360 -> 缩放 0.5
+  # RealSense 原始内参: fx=fy=927.17 (近似), 缩放到 640x360 后如下
+  fx: 463.585
+  fy: 463.585
+  cx: 320.0
+  cy: 180.0
+  width: 640
+  height: 360
+  depth_scale: 1000.0   # 深度单位 mm -> m
+  depth_max: 1.5        # 超过该深度的像素视为无效 (m)
+
+# ---------- 2D 抓取区域预测 (论文 Step2) ----------
+heatmap:
+  r: 8                  # 论文超参: 网格划分步长, 输出热图为 H/r x W/r
+  k_a: 6                # 论文超参: 每个网格的锚框角度数 (theta 离散化)
+  gaussian_sigma: 2.0   # 高斯编码 sigma (网格单位)
+  topk_c: 64            # k_c: 推理时从置信热图选取的 top-k 候选网格数
+  conf_thresh: 0.1      # 置信度阈值
+  width_max: 0.10       # 夹爪宽度最大值 (m), 用于归一化
+  depth_offset_max: 0.05  # 深度偏移最大值 (m), 用于归一化
+
+# ---------- 局部点云 (论文 Step3) ----------
+local_cloud:
+  n0: 512               # 论文 N0: FPS 下采样后的点数
+  radius_scale: 1.2     # 球半径 = radius_scale * 预测夹爪宽度 w
+  min_points: 16        # 球内点数不足时按最近邻补齐
+
+# ---------- 非均匀采样抓取位姿搜索 (论文 Step4, 核心创新) ----------
+search:
+  num_views: 300        # 接近向量总数 (论文栅格化球面)
+  gamma_bins: 12        # gamma (绕接近轴旋转角) 离散数
+  feat_dim: 512         # 局部融合特征维度
+  bcd_iters: 8          # 训练阶段块坐标下降迭代次数
+  bcd_lr: 0.1           # 块坐标下降更新步长
+  topk_pose: 10         # 每个局部区域输出的候选 6-DoF 位姿数
+
+# ---------- 损失权重 (论文 L = L_c + a*L_theta + b*L_w + c*L_D + L_v + d*L_o) ----------
+loss:
+  a_theta: 1.0
+  b_width: 1.0
+  c_depth: 1.0
+  d_search: 1.0         # 搜索模块分类损失权重
+
+# ---------- 训练 ----------
+train:
+  batch_size: 8
+  epochs: 20
+  lr: 0.001
+  weight_decay: 0.0001
+  num_workers: 0        # Windows 下设 0
+  save_dir: "checkpoints"
+  scene_ids: []         # 为空则自动取数据集前 N 个场景
+  max_scenes: 10        # demo 默认只用前 10 个场景快速验证
+  seed: 42
+
+# ---------- 合成数据 (无真实数据集时的自测模式) ----------
+synthetic:
+  num_samples: 200
+  num_objects: 3
+  noise: 0.002
+
+# ---------- 推理 ----------
+inference:
+  min_score: 0.2
+  voxel_size: 0.005     # 点云体素下采样 (m)
+  use_synthetic: false  # true 时强制使用合成数据自测
+
+# ---------- VLM (Step5, 可选) ----------
+vlm:
+  enabled: false
+  model_name: "Qwen/Qwen-VL-Chat"
+  device: "cuda"
+  prompt_template: "框出图中的{target}"
+
+# ---------- 真实相机 (Step7, 可选) ----------
+realsense:
+  width: 640
+  height: 360
+  fps: 30
